@@ -1,0 +1,22 @@
+# Credentials and Local configuration
+config.json
+
+# Local databases and caches
+sync_history.json
+geocode_cache.json
+sync.lock
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# OS specific files
+.DS_Store
+
+# Virtual Environment
+venv/
+.venv/
+env/

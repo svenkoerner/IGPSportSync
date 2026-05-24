@@ -1,0 +1,7 @@
+{
+  "garmin_email": "your.email@example.com",
+  "garmin_password": "your_garmin_password",
+  "watch_folder": "/path/to/input/folder",
+  "archive_folder": "/path/to/archive/folder",
+  "rename_local_files": true
+}
