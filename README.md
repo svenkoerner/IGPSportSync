@@ -46,11 +46,22 @@ Open `config.json` and fill in your credentials and directories:
 ```
 
 * **`garmin_email` / `garmin_password`**: Your Garmin Connect login credentials.
-* **`igpsport_username` / `igpsport_password`**: (Optional) Your iGPSPORT login credentials (e.g. your mobile number and password). Leave these empty or omit them if you only want to sync local files.
+* **`igpsport_username` / `igpsport_password`**: (Optional) Your iGPSPORT login credentials (e.g. your mobile number/email and password). Leave these empty or omit them if you only want to sync local files.
 * **`watch_folder`**: The path where you copy activity files from your bike computer or where iGPSPORT files will be downloaded.
 * **`archive_folder`**: The directory where processed files (successes and duplicates) will be moved to keep your watch folder clean.
 * **`rename_local_files`**: Set to `true` to rename files in the archive to match the tour name.
 * **`delete_from_igpsport_after_sync`**: If `true` and iGPSPORT credentials are provided, the script will prompt you at the end of the sync to delete successfully transferred activities from iGPSPORT.
+
+### Alternative / Manual iGPSport Download Instructions
+If you prefer to manually fetch your `.fit` files directly from the iGPSPORT browser dashboard:
+1. Open your web browser and go to the iGPSPORT Passport portal: **`https://login.passport.igpsport.com/login`** (or `https://passport.igpsport.com/`).
+2. Log in using the same credentials configured for iGPSport.
+3. Once logged in, navigate to your **Activity Records** / **History** list page.
+4. Click on the name of the activity you want to download to open its detail page.
+5. Click the **"Download"** button located at the top right corner of the activity detail page to download the `.fit` file directly.
+6. Save or move the downloaded `.fit` file into your local **`watch`** folder.
+7. Run `python3 sync.py` to automatically geocode, name, upload to Garmin Connect, and archive the files!
+8. If local deletion is set to `true`, you can then manually click the **"Delete"** button at the top right of the activity detail page on iGPSport's portal and confirm deletion.
 
 ---
 
