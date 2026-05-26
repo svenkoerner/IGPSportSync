@@ -71,8 +71,16 @@ class IGPSPORTClient:
             "Referer": "https://app.igpsport.com/"
         })
 
+    def update_base_url(self, base):
+        """Updates all endpoints dynamically when switching backends."""
+        self.BASE_URL = base
+        self.LOGIN_URL = base + "auth/account/login"
+        self.ACTIVITY_URL = base + "web-gateway/web-analyze/activity/"
+        self.QUERY_URL = self.ACTIVITY_URL + "queryMyActivity"
+        self.DOWNLOAD_URL = self.ACTIVITY_URL + "getDownloadUrl/"
+
     def login(self):
-        """Authenticates with iGPSPORT and retrieves access token."""
+        """Authenticates with iGPSPORT and retrieves access token. Fallbacks to international backend if 403 Forbidden is received."""
         if not self.username or not self.password:
             raise ValueError("iGPSPORT username or password not provided in config.")
             
@@ -81,25 +89,40 @@ class IGPSPORTClient:
             "username": self.username,
             "password": self.password,
         }
-        try:
-            rsp = self.session.post(self.LOGIN_URL, json=req)
-            if not rsp.ok:
-                raise Exception(f"HTTP error {rsp.status_code}: {rsp.reason}")
-            ret = rsp.json()
-            if ret.get("code") != 0 and ret.get("Code") != 0:
-                msg = ret.get("message") or ret.get("Message") or "Unknown error"
-                raise Exception(f"Login failed: {msg}")
+        
+        # Candidate backends (Chinese domestic vs Global/International)
+        backends = [
+            "https://prod.zh.igpsport.com/service/",
+            "https://prod.igpsport.com/service/"
+        ]
+        
+        last_err = None
+        for base in backends:
+            login_url = base + "auth/account/login"
+            try:
+                rsp = self.session.post(login_url, json=req)
+                if rsp.status_code == 403:
+                    raise Exception("HTTP 403 Forbidden (WAF restriction)")
+                if not rsp.ok:
+                    raise Exception(f"HTTP error {rsp.status_code}: {rsp.reason}")
+                ret = rsp.json()
+                if ret.get("code") != 0 and ret.get("Code") != 0:
+                    msg = ret.get("message") or ret.get("Message") or "Unknown error"
+                    raise Exception(f"Login failed: {msg}")
+                    
+                access_token = ret.get("data", {}).get("access_token", "")
+                if not access_token:
+                    raise Exception("Access token missing in login response.")
+                    
+                self.token = access_token
+                self.update_base_url(base)
+                self.session.headers.update({"Authorization": "Bearer " + access_token})
+                return True
+            except Exception as e:
+                print(f"[i] Failed login attempt via {base}: {e}")
+                last_err = e
                 
-            access_token = ret.get("data", {}).get("access_token", "")
-            if not access_token:
-                raise Exception("Access token missing in login response.")
-                
-            self.token = access_token
-            self.session.headers.update({"Authorization": "Bearer " + access_token})
-            return True
-        except Exception as e:
-            print(f"[-] iGPSPORT login failed: {e}")
-            raise
+        raise Exception(f"iGPSPORT login failed on all backends. Last error: {last_err}")
 
     def get_activities(self, page_no=1, page_size=20):
         """Retrieves user activity list from iGPSPORT."""
