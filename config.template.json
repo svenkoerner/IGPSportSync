@@ -1,7 +1,10 @@
 {
   "garmin_email": "your.email@example.com",
   "garmin_password": "your_garmin_password",
+  "igpsport_username": "your_igpsport_phone_or_email",
+  "igpsport_password": "your_igpsport_password",
   "watch_folder": "/path/to/input/folder",
   "archive_folder": "/path/to/archive/folder",
-  "rename_local_files": true
+  "rename_local_files": true,
+  "delete_from_igpsport_after_sync": true
 }

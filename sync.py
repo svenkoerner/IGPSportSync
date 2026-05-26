@@ -12,6 +12,13 @@ import shutil
 
 # Check if required modules are installed
 try:
+    import requests
+except ImportError:
+    print("[-] Error: 'requests' package is not installed.")
+    print("    Please run: pip install -r requirements.txt")
+    sys.exit(1)
+
+try:
     from garminconnect import Garmin, GarminConnectConnectionError
 except ImportError:
     print("[-] Error: 'garminconnect' package is not installed.")
@@ -41,6 +48,156 @@ GEOCODE_CACHE_FILE = "geocode_cache.json"
 
 # In-memory geocoding cache to minimize Nominatim API hits
 GEOCODE_CACHE = {}
+
+
+class IGPSPORTClient:
+    """Client for fetching and managing activities on app.igpsport.com."""
+    
+    BASE_URL = "https://prod.zh.igpsport.com/service/"
+    LOGIN_URL = BASE_URL + "auth/account/login"
+    ACTIVITY_URL = BASE_URL + "web-gateway/web-analyze/activity/"
+    QUERY_URL = ACTIVITY_URL + "queryMyActivity"
+    DOWNLOAD_URL = ACTIVITY_URL + "getDownloadUrl/"
+
+    def __init__(self, username, password):
+        self.username = username
+        self.password = password
+        self.token = None
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://app.igpsport.com",
+            "Referer": "https://app.igpsport.com/"
+        })
+
+    def login(self):
+        """Authenticates with iGPSPORT and retrieves access token."""
+        if not self.username or not self.password:
+            raise ValueError("iGPSPORT username or password not provided in config.")
+            
+        req = {
+            "appId": "igpsport-web",
+            "username": self.username,
+            "password": self.password,
+        }
+        try:
+            rsp = self.session.post(self.LOGIN_URL, json=req)
+            if not rsp.ok:
+                raise Exception(f"HTTP error {rsp.status_code}: {rsp.reason}")
+            ret = rsp.json()
+            if ret.get("code") != 0 and ret.get("Code") != 0:
+                msg = ret.get("message") or ret.get("Message") or "Unknown error"
+                raise Exception(f"Login failed: {msg}")
+                
+            access_token = ret.get("data", {}).get("access_token", "")
+            if not access_token:
+                raise Exception("Access token missing in login response.")
+                
+            self.token = access_token
+            self.session.headers.update({"Authorization": "Bearer " + access_token})
+            return True
+        except Exception as e:
+            print(f"[-] iGPSPORT login failed: {e}")
+            raise
+
+    def get_activities(self, page_no=1, page_size=20):
+        """Retrieves user activity list from iGPSPORT."""
+        if not self.token:
+            self.login()
+            
+        params = {
+            "pageNo": str(page_no),
+            "pageSize": str(page_size),
+            "sort": "1",
+            "reqType": "0"  # 0 for FIT, 1 for GPX
+        }
+        try:
+            rsp = self.session.get(self.QUERY_URL, params=params)
+            if not rsp.ok:
+                raise Exception(f"HTTP error {rsp.status_code}: {rsp.reason}")
+            ret = rsp.json()
+            if ret.get("code") != 0 and ret.get("Code") != 0:
+                msg = ret.get("message") or ret.get("Message") or "Unknown error"
+                raise Exception(f"Query failed: {msg}")
+            return ret
+        except Exception as e:
+            print(f"[-] Failed to fetch iGPSPORT activities: {e}")
+            raise
+
+    def get_download_url(self, ride_id):
+        """Gets the FIT file download URL for a specific ride ID."""
+        if not self.token:
+            self.login()
+            
+        try:
+            rsp = self.session.get(f"{self.DOWNLOAD_URL}{ride_id}")
+            if not rsp.ok:
+                raise Exception(f"HTTP error {rsp.status_code}: {rsp.reason}")
+            ret = rsp.json()
+            if ret.get("code") != 0 and ret.get("Code") != 0:
+                msg = ret.get("message") or ret.get("Message") or "Unknown error"
+                raise Exception(f"Get download URL failed: {msg}")
+            return ret.get("data", "")
+        except Exception as e:
+            print(f"[-] Failed to retrieve download URL for ride {ride_id}: {e}")
+            raise
+
+    def download_activity(self, ride_id, dest_folder):
+        """Downloads the activity file and saves it in the destination folder."""
+        file_path = os.path.join(dest_folder, f"igpsport_{ride_id}.fit")
+        try:
+            download_url = self.get_download_url(ride_id)
+            if not download_url:
+                raise Exception("No download URL returned by iGPSPORT.")
+                
+            rsp = self.session.get(download_url)
+            if not rsp.ok:
+                raise Exception(f"HTTP error {rsp.status_code} downloading file: {rsp.reason}")
+                
+            with open(file_path, "wb") as f:
+                f.write(rsp.content)
+            return file_path
+        except Exception as e:
+            print(f"[-] Failed to download activity {ride_id}: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise
+
+    def delete_activity(self, ride_id):
+        """Attempts to delete the activity using multiple candidate endpoints (reverse-engineered)."""
+        if not self.token:
+            self.login()
+            
+        # Candidate URLs
+        candidates = [
+            (f"{self.ACTIVITY_URL}delete", {"rideId": ride_id}),
+            (f"{self.ACTIVITY_URL}delete", {"rideId": str(ride_id)}),
+            (f"{self.ACTIVITY_URL}deleteActivity", {"rideId": ride_id}),
+            (f"{self.ACTIVITY_URL}deleteMyActivity", {"rideId": ride_id}),
+            (f"{self.ACTIVITY_URL}delete", {"id": ride_id}),
+        ]
+        
+        errors = []
+        for url, payload in candidates:
+            try:
+                rsp = self.session.post(url, json=payload)
+                if rsp.status_code == 200:
+                    ret = rsp.json()
+                    if ret.get("code") == 0 or ret.get("Code") == 0:
+                        print(f"[✓] Activity {ride_id} successfully deleted from iGPSPORT.")
+                        return True
+                    else:
+                        errors.append(f"Endpoint {url} returned API error code: {ret}")
+                else:
+                    errors.append(f"Endpoint {url} returned HTTP status {rsp.status_code}")
+            except Exception as e:
+                errors.append(f"Endpoint {url} raised exception: {e}")
+                
+        print(f"[-] Failed to delete activity {ride_id} from iGPSPORT cloud. Tried all candidates.")
+        for err in errors:
+            print(f"    - {err}")
+        return False
 
 
 def load_config():
@@ -402,6 +559,58 @@ def main():
         release_lock()
         sys.exit(1)
         
+    # iGPSPORT Cloud Sync Integration
+    igpsport_user = config.get('igpsport_username')
+    igpsport_pass = config.get('igpsport_password')
+    igp_client = None
+    ride_id_map = {}  # mapping file_hash -> rideId
+    ride_name_map = {}  # mapping rideId -> title
+    succeeded_ride_ids = []
+    
+    if igpsport_user and igpsport_pass:
+        print("[*] iGPSPORT credentials configured. Checking cloud activities...")
+        try:
+            igp_client = IGPSPORTClient(igpsport_user, igpsport_pass)
+            igp_client.login()
+            print("[✓] iGPSPORT login successful.")
+            
+            print("[*] Fetching activity list from iGPSPORT cloud...")
+            list_res = igp_client.get_activities(page_no=1, page_size=20)
+            rows = list_res.get("data", {}).get("rows", [])
+            print(f"[i] Found {len(rows)} activities on iGPSPORT cloud.")
+            
+            new_downloads = 0
+            for row in rows:
+                ride_id = row.get("rideId")
+                ride_title = row.get("title") or f"Ride {ride_id}"
+                
+                # Check if this rideId is in history
+                already_synced = False
+                for h_hash, h_entry in history.items():
+                    if h_entry.get('ride_id') == ride_id and h_entry.get('status') in ['SUCCESS', 'DUPLICATE']:
+                        already_synced = True
+                        break
+                        
+                if not already_synced:
+                    print(f"[*] Downloading new activity from iGPSPORT: '{ride_title}' (ID: {ride_id})...")
+                    try:
+                        file_path = igp_client.download_activity(ride_id, watch_folder)
+                        file_hash = compute_md5(file_path)
+                        ride_id_map[file_hash] = ride_id
+                        ride_name_map[ride_id] = ride_title
+                        new_downloads += 1
+                        print(f"[✓] Downloaded to: {os.path.basename(file_path)}")
+                    except Exception as e:
+                        print(f"[!] Failed to download ride {ride_id}: {e}")
+                        
+            if new_downloads > 0:
+                print(f"[i] Downloaded {new_downloads} new activity file(s) from iGPSPORT.")
+            else:
+                print("[i] No new activities to download from iGPSPORT.")
+                
+        except Exception as e:
+            print(f"[!] iGPSPORT cloud sync skipped due to error: {e}")
+            
     # Get all .fit and .gpx files
     files = []
     for f in os.listdir(watch_folder):
@@ -437,6 +646,14 @@ def main():
         
         # 1. Compute file hash to prevent double syncs
         file_hash = compute_md5(file_path)
+        
+        # Try to extract ride_id from filename or ride_id_map
+        ride_id = ride_id_map.get(file_hash)
+        if not ride_id:
+            match = re.match(r'igpsport_(\d+)\.fit', filename.lower())
+            if match:
+                ride_id = int(match.group(1))
+                
         if file_hash in history:
             entry = history[file_hash]
             status = entry.get('status')
@@ -444,6 +661,11 @@ def main():
             
             # If it was already completed or marked duplicate, we just move it to archive if it's still here
             if status in ['SUCCESS', 'DUPLICATE']:
+                # Update ride_id in history if it was missing
+                if ride_id and not entry.get('ride_id'):
+                    entry['ride_id'] = ride_id
+                    save_history(history)
+                    
                 if archive_folder:
                     try:
                         dest_name = entry.get('archived_filename', filename)
@@ -492,7 +714,8 @@ def main():
                     "filename": filename,
                     "timestamp": datetime.now().isoformat(),
                     "status": "FAILED",
-                    "error": str(e)
+                    "error": str(e),
+                    "ride_id": ride_id
                 }
                 save_history(history)
                 continue
@@ -514,6 +737,9 @@ def main():
             else:
                 print("[!] Could not determine activity ID to rename activity on Garmin Connect.")
             success_count += 1
+            
+        if upload_success and ride_id:
+            succeeded_ride_ids.append((ride_id, tour_name))
             
         # 6. File archiving and local renaming
         final_filename = filename
@@ -569,7 +795,8 @@ def main():
                 "timestamp": datetime.now().isoformat(),
                 "status": status_val,
                 "activity_id": activity_id,
-                "tour_name": tour_name
+                "tour_name": tour_name,
+                "ride_id": ride_id
             }
             save_history(history)
             
@@ -581,6 +808,42 @@ def main():
     print(f"Failed uploads:              {fail_count}")
     print("=========================================")
     
+    # iGPSPORT Deletion Prompt
+    delete_enabled = config.get('delete_from_igpsport_after_sync', False)
+    if delete_enabled and succeeded_ride_ids:
+        print("\n=========================================")
+        print("          iGPSPORT Deletion Prompt       ")
+        print("=========================================")
+        print(f"The following {len(succeeded_ride_ids)} activities were successfully synced to Garmin Connect:")
+        for r_id, r_name in succeeded_ride_ids:
+            print(f"  - {r_name} (ID: {r_id})")
+            
+        print("\n[?] Would you like to delete these activities from your iGPSPORT account?")
+        ans = input("Confirm deletion? (y/N): ").strip().lower()
+        if ans in ['y', 'yes']:
+            print("[*] Deleting activities from iGPSPORT...")
+            try:
+                if not igp_client:
+                    igp_client = IGPSPORTClient(igpsport_user, igpsport_pass)
+                    igp_client.login()
+                
+                deleted_count = 0
+                for r_id, r_name in succeeded_ride_ids:
+                    print(f"[*] Deleting ride {r_id} ({r_name})...")
+                    if igp_client.delete_activity(r_id):
+                        deleted_count += 1
+                        # Update history status to deleted
+                        for h_hash, h_entry in history.items():
+                            if h_entry.get('ride_id') == r_id:
+                                h_entry['deleted_from_igpsport'] = True
+                                h_entry['deleted_timestamp'] = datetime.now().isoformat()
+                        save_history(history)
+                print(f"[✓] Deleted {deleted_count} of {len(succeeded_ride_ids)} activities from iGPSPORT.")
+            except Exception as e:
+                print(f"[-] Deletion process failed: {e}")
+        else:
+            print("[i] Deletion cancelled. Activities will remain on iGPSPORT.")
+            
     release_lock()
 
 

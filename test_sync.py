@@ -11,7 +11,8 @@ from sync import (
     sanitize_filename,
     extract_activity_id_from_response,
     generate_tour_name,
-    extract_gpx_data
+    extract_gpx_data,
+    IGPSPORTClient
 )
 
 class TestSyncApp(unittest.TestCase):
@@ -110,6 +111,89 @@ class TestSyncApp(unittest.TestCase):
             self.assertEqual(start_time.second, 5)
         finally:
             os.remove(temp_path)
+
+    @patch('sync.requests.Session')
+    def test_igpsport_client_login_success(self, mock_session):
+        session_instance = mock_session.return_value
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "code": 0,
+            "data": {
+                "access_token": "mock_jwt_token"
+            }
+        }
+        session_instance.post.return_value = mock_response
+
+        client = IGPSPORTClient("test_user", "test_pass")
+        self.assertTrue(client.login())
+        self.assertEqual(client.token, "mock_jwt_token")
+        session_instance.post.assert_called_once_with(
+            "https://prod.zh.igpsport.com/service/auth/account/login",
+            json={"appId": "igpsport-web", "username": "test_user", "password": "test_pass"}
+        )
+
+    @patch('sync.requests.Session')
+    def test_igpsport_client_login_failure(self, mock_session):
+        session_instance = mock_session.return_value
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "code": 10001,
+            "message": "Wrong password"
+        }
+        session_instance.post.return_value = mock_response
+
+        client = IGPSPORTClient("test_user", "test_pass")
+        with self.assertRaises(Exception) as context:
+            client.login()
+        self.assertIn("Login failed: Wrong password", str(context.exception))
+
+    @patch('sync.requests.Session')
+    def test_igpsport_client_get_activities(self, mock_session):
+        session_instance = mock_session.return_value
+        mock_response = MagicMock()
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "code": 0,
+            "data": {
+                "rows": [
+                    {"rideId": 12345, "title": "Tour 1"},
+                    {"rideId": 67890, "title": "Tour 2"}
+                ]
+            }
+        }
+        session_instance.get.return_value = mock_response
+
+        client = IGPSPORTClient("test_user", "test_pass")
+        client.token = "mock_token"
+        res = client.get_activities(page_no=1, page_size=20)
+        self.assertEqual(res["code"], 0)
+        self.assertEqual(len(res["data"]["rows"]), 2)
+        session_instance.get.assert_called_once_with(
+            "https://prod.zh.igpsport.com/service/web-gateway/web-analyze/activity/queryMyActivity",
+            params={"pageNo": "1", "pageSize": "20", "sort": "1", "reqType": "0"}
+        )
+
+    @patch('sync.requests.Session')
+    def test_igpsport_client_delete_activity_success(self, mock_session):
+        session_instance = mock_session.return_value
+        
+        mock_response_fail = MagicMock()
+        mock_response_fail.status_code = 404
+        
+        mock_response_success = MagicMock()
+        mock_response_success.status_code = 200
+        mock_response_success.json.return_value = {"code": 0}
+        
+        session_instance.post.side_effect = [mock_response_fail, mock_response_success]
+        
+        client = IGPSPORTClient("test_user", "test_pass")
+        client.token = "mock_token"
+        
+        self.assertTrue(client.delete_activity(12345))
+        self.assertEqual(session_instance.post.call_count, 2)
+
 
 if __name__ == '__main__':
     unittest.main()
