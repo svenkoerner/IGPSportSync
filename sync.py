@@ -546,18 +546,35 @@ def main():
     history = load_history()
     load_geocode_cache()
     
-    watch_folder = os.path.abspath(config['watch_folder'])
+    watch_folder = config['watch_folder']
+    watch_folder = os.path.abspath(watch_folder)
+    
     archive_folder = config.get('archive_folder')
     if archive_folder:
         archive_folder = os.path.abspath(archive_folder)
-        os.makedirs(archive_folder, exist_ok=True)
+        try:
+            os.makedirs(archive_folder, exist_ok=True)
+        except OSError as e:
+            print(f"[-] Error: Could not create archive folder '{archive_folder}': {e}")
+            if config.get('archive_folder', '').startswith('/'):
+                print("    Hint: Your path starts with '/'. On macOS, the root directory is read-only.")
+                print("          Please use a relative path (e.g. './archive') or a path in your user directory (e.g. '/Users/username/Desktop/archive').")
+            release_lock()
+            sys.exit(1)
         
     rename_local = config.get('rename_local_files', True)
     
     if not os.path.exists(watch_folder):
-        print(f"[-] Watch folder '{watch_folder}' does not exist.")
-        release_lock()
-        sys.exit(1)
+        try:
+            os.makedirs(watch_folder, exist_ok=True)
+            print(f"[i] Created watch folder: {watch_folder}")
+        except OSError as e:
+            print(f"[-] Error: Could not create watch folder '{watch_folder}': {e}")
+            if config.get('watch_folder', '').startswith('/'):
+                print("    Hint: Your path starts with '/'. On macOS, the root directory is read-only.")
+                print("          Please use a relative path (e.g. './watch') or a path in your user directory (e.g. '/Users/username/Desktop/watch').")
+            release_lock()
+            sys.exit(1)
         
     # iGPSPORT Cloud Sync Integration
     igpsport_user = config.get('igpsport_username')
