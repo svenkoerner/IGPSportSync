@@ -611,10 +611,17 @@ def main():
         print("[*] iGPSPORT credentials configured. Checking cloud activities...")
         try:
             igp_client = IGPSPORTClient(igpsport_user, igpsport_pass)
-            igp_client.login()
-            print("[✓] iGPSPORT login successful.")
-            
-            print("[*] Fetching activity list from iGPSPORT cloud...")
+            try:
+                igp_client.login()
+                print("[✓] iGPSPORT login successful.")
+            except Exception as e:
+                # Set client to None so we don't attempt other operations later
+                igp_client = None
+                print(f"[!] iGPSPORT login failed: {e}")
+                print("[i] Continuing script execution to scan local watch folder...")
+                
+            if igp_client:
+                print("[*] Fetching activity list from iGPSPORT cloud...")
             list_res = igp_client.get_activities(page_no=1, page_size=20)
             rows = list_res.get("data", {}).get("rows", [])
             print(f"[i] Found {len(rows)} activities on iGPSPORT cloud.")
